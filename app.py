@@ -1,118 +1,50 @@
-from flask import Flask, request, jsonify, make_response
-from flask_mysqldb import MySQL
-from datetime import datetime
-import random
+from flask import Flask, render_template, request, redirect, url_for, flash
+import hashlib
+import mysql.connector
 
 app = Flask(__name__)
 
-app.config['MYSQL_HOST'] = 'localhost'
-app.config['MYSQL_USER'] = 'root'
-app.config['MYSQL_PASSWORD'] = 'root'
-app.config['MYSQL_DB'] = 'temp_astutor'
-app.config['MYSQL_CURSORCLASS'] = "DictCursor"
+db = mysql.connector.connect(
+    host="localhost", user="root", password="root", database="flask_login_db"
+)
+cursor = db.cursor()
 
-mysql = MySQL(app)
 
-def query_exec(query):
-    cur = mysql.connection.cursor()
-    cur.execute(query)
-    rows = cur.fetchall()
-    cur.close()
-    return(rows)
+@app.route("/register", methods=["POST"])
+def register():
+    if request.method == "POST":
+        username = request.form["username"]
+        password = request.form["password"]
 
-def one_time_password():
-    otp = ""
-    for _ in range(6):
-        otp += str(random.randint(0, 9))
-    return otp
+        hashed_pass = hashlib.sha256(
+            password.encode()
+        ).hexdigest()  # password encryption
 
-def otp_verification(email, otp):
-    rows = query_exec(f"select otp from otps where email = '{email}'")
-    if not rows:
-        return False
-    
-    if otp == rows[0]["otp"]:
-        return True
-    return False
+        cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
+        existing_user = cursor.fetchone()
 
-@app.route("/")
-def home_page():
-    home = """
-    <h1>Astutor</h1>
-    """
-    return home
+        if existing_user:  # check if user exists
+            flash(
+                "User already exists. Please choose a different username.", "error"
+            )  # if user exist, return error message where user already exists
+            return redirect(url_for("register"))
 
-@app.route("/student", methods=["GET"])
-def get_records():
+        cursor.execute(
+            "INSERT INTO users (username, password) VALUES (%s, %s)",
+            (username, hashed_pass),
+        )  # if user does not exist, save to db
+        db.commit()
 
-    rows = query_exec("select * from students")
-    
-    return make_response(jsonify(rows), 200)
+        flash("Registration successful! Please log in.", "success")
+        return redirect(url_for("login"))  # redirect to login page
 
-@app.route("/otp", methods=["POST"])
-def get_otp():
-    conn = mysql.connection
-    cur = conn.cursor()
+    return render_template("register.html")
 
-    info = request.get_json()
-    email = info["email"]
-    generated_otp = one_time_password()
 
-    try:
-        cur.execute(
-        f"""
-            insert into otps(email, otp) value('{email}', '{generated_otp}')
-        """
-        )
+@app.route("/login")  # temp login
+def login():
+    return render_template("login.html")
 
-        conn.commit()
-
-        db_otp = query_exec(f"select otp from otps where email = '{email}'")
-        otp = db_otp[0]["otp"] if db_otp else None
-
-        return make_response(jsonify({"message": "otp sent successfully", "otp": otp}), 201)
-    
-    except Exception as e:
-        conn.rollback()
-        return make_response(jsonify({"error": str(e)}), 500)
-
-    finally:
-        cur.close()
-
-@app.route("/student", methods=["POST"])
-def sign_up():
-    conn = mysql.connection
-    cur = conn.cursor()
-
-    info = request.get_json()
-    first_name = info["first_name"]
-    last_name = info["last_name"]
-    email = info["email"]
-    otp = info["otp"]
-    age = info["age"]
-    gender = info["gender"]
-
-    if otp_verification(email, otp) == False:
-        return make_response(jsonify({"message": "otp is wrong"}), 401)
-
-    try:
-        cur.execute(
-            f"""
-            insert into students(first_name, last_name, email, age, gender) value('{first_name}', '{last_name}', '{email}', '{age}', '{gender}')
-            """
-        )
-
-        conn.commit()
-        rows_affected = cur.rowcount
-
-        return make_response(jsonify({"message": "record added successfully", "rows_affected": rows_affected}), 201)
-    
-    except Exception as e:
-        conn.rollback()
-        return make_response(jsonify({"error": str(e)}), 500)
-
-    finally:
-        cur.close()
 
 if __name__ == "__main__":
     app.run(debug=True)
